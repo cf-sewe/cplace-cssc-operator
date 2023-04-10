@@ -14,17 +14,17 @@ The cSSC Operator is responsible for managing cplace instances:
     - [Classic](#classic)
     - [Nomad](#nomad)
     - [Kubernetes](#kubernetes)
-  - [Example Flow](#example-flow)
-    - [cplace Instance is Deployed](#cplace-instance-is-deployed)
-      - [User Inputs](#user-inputs)
-      - [Preparation](#preparation)
   - [cplace Release Management](#cplace-release-management)
   - [Instance Configuration](#instance-configuration)
   - [APIs](#apis)
     - [Environment API](#environment-api)
     - [Instances API](#instances-api)
       - [Snapshots API](#snapshots-api)
-  - [Admin Scripts API](#admin-scripts-api)
+    - [Admin Scripts API](#admin-scripts-api)
+    - [DNS API](#dns-api)
+  - [Example Flow](#example-flow)
+    - [cplace Instance is Deployed](#cplace-instance-is-deployed)
+      - [User Inputs](#user-inputs)
   - [Unsorted Ideas](#unsorted-ideas)
 
 ## Design
@@ -37,7 +37,6 @@ cplace instance configuration is provided by GIT and instance status is determin
 We use the following dependencies:
 
 - [gin-gonic/gin](https://github.com/gin-gonic/gin): Web framework
-- [rookie-ninja/rk-boot](https://github.com/rookie-ninja/rk-boot): Bootstrapper
 - [go-git/go-git](https://github.com/go-git/go-git): GIT interface
 
 For classic stack:
@@ -111,7 +110,7 @@ TBD We could also have one repo for all environment and would then have the foll
 >   /environments/test/instances:
 >     sewe.cf.test.cplace.cloud/config.yaml
 
-In the beginning we use one repo for all environments.
+In the beginning we use one repository for all environments.
 For production use (once introduced) we'd prefer the one-GIT-per-environment approach for compliance reasons.
 
 Instance configuration (config.yaml):
@@ -347,7 +346,6 @@ The information is retrieved from the meta JSON file.
   - status: success, failed, running, aborted (cplace regular restart), crashed (cplace crashed)
 
 Params:
-
 - status: filter by status
 - limit: retrieve only specified number of snapshots (default 10)
 - offset: 0
