@@ -1,14 +1,9 @@
 # cplace Self-Service Cloud: Operator
 
-The cSSC Operator is responsible for managing cplace instances:
-
-- Uses GIT to obtain instance configurations.
-- Provides an HTTP API:
-  - Implements a webhook to retrieve notifications from GitHub about instance configuration changes.
-  - Implements the cSSC Controller interface for providing environment and instance status as well as the possibility to trigger actions.
-
 - [cplace Self-Service Cloud: Operator](#cplace-self-service-cloud-operator)
+  - [Introduction](#introduction)
   - [Design](#design)
+    - [Data Persistency](#data-persistency)
     - [Dependencies](#dependencies)
   - [Stacks](#stacks)
     - [Classic](#classic)
@@ -26,10 +21,61 @@ The cSSC Operator is responsible for managing cplace instances:
     - [cplace Instance is Deployed](#cplace-instance-is-deployed)
       - [User Inputs](#user-inputs)
   - [Unsorted Ideas](#unsorted-ideas)
+  - [Links](#links)
+
+## Introduction
+
+This service is called Operator and is responsible for managing cplace instance deployments for a specific environment via GIT and a RESTful API.
+One instance of the operator is responsible for one environment.
+There are several environment types (stacks): Docker Swarm, Nomad, and Kubernetes.
+
+The operator configuration is loaded from the OS environment variables or a `.env` file.
+One environment contains cplace instances, that are managed by the operator.
+The cplace instances are defined in a GIT repository, with one YAML file per instance.
+
+When the Operator starts, it will initialize the connection to the environment using the connection data specified in the env configuration.
+It also starts a background worker that checks the GIT repository for instance definitions (including their configuration)
+and applies them to the environment regularly.
+
+Then it initializes the gin framework HTTP routes for environment and instance management.
+Example actions that may be triggered via API:
+
+- `GET /environment`: Returns environment information, including status
+- `GET /instances`: Returns information of all instances or instances matching the filters.
+  Example information: status, cplace version info, used capacity.
+- `GET /instances/{instanceId}`: Returns information for a specific instance.
+- `GET /instances/{instanceId}/log`: Returns the logs of the specified instance.
+- `GET /instances/{instanceId}/metrics`: Returns the basic metrics of the specified instance.
+  Example metrics: healthy, uptime, CPU usage, heap memory usage, used storage.
+- `GET /instances/{instanceId}/events`: Returns the events of the specified instance.
+- `POST /instances/{instanceId}/restart`: Restarts the specified instance.
+- `GET /instances/{instanceId}/snapshots`: Lists all snapshots of the specified cplace instance.
+- `POST /instances/{instanceId}/snapshots`: Creates a cplace snapshot using Tenant export functionality.
+- `GET /instances/{instanceId}/snapshots/{snapshotId}`: Retrieves information for the specified snapshot and instance.
+- `DELETE /instances/{instanceId}/snapshots/{snapshotId}`: Deletes the specified snapshot.
+- `GET /instances/{instanceId}/admin-scripts`: Lists all admin scripts of the specified cplace instance that have been executed.
+- `POST /instances/{instanceId}/admin-scripts`: Uploads a new admin script and executes it.
+- `GET /instances/{instanceId}/admin-scripts/{adminScriptId}`: Retrieves information for the specified admin script and instance.
 
 ## Design
 
-The Operator is stateless - it does not require a database.
+### Data Persistency
+
+The Operator does not have a database in the traditional sense, but it stores certain instance information on storage:
+
+1. Snapshot information:
+  Information about the snapshots that exist for a certain instance is collected in a JSON file, e.g. `/instances/sewe.cf.test.cplace.cloud/snapshots.json`.
+
+2. Events:
+  Information about all activities performed by the Operator for a specific instance is stored in a JSON file, e.g. `/instances/sewe.cf.test.cplace.cloud/events.json`.
+
+3. Admin Scripts:
+  Information about all admin scripts that are executed for a specific instance is stored in a JSON file, e.g. `/instances/sewe.cf.test.cplace.cloud/admin-scripts.json`
+
+4. Software releases:
+   Software releases are downloaded in the deployment phase of a cplace instance.
+   To allow efficient deployments, the releases are stored at a central location and hard-linked to the containers that require that build.
+
 cplace instance configuration is provided by GIT and instance status is determined on-the-fly from the running system.
 
 ### Dependencies
@@ -48,22 +94,26 @@ For classic stack:
 ### Classic
 
 This stack relies on Hetzner dedicated machines for running cplace instances cost-efficiently.
-Multiple servers form a cSSC environment, but there is no technical cluster.
-The servers are operating completely independently.
-High availability, failover and use of load balancer are not supported.
+The intended use is for non-commercial instances.
 
 cplace is running as Docker containers and the data is stored on Docker volumes backed by ZFS.
 The cplace container will be built on-the-fly from the software downloaded from Central.
 
-Responsibilities:
+The classic stack makes use of a simple Docker Swarm cluster.
+This brings the advantage of a single HTTP API endpoint for managing the Docker deployments.
+We can also use a wildcard domain (e.g. *.test.cplace.cloud) and use a Hetzner load-balancer as cluster entry-point.
 
-- Instance Management
-  - cplace Update
-  - DNS Management (creates Cloudflare DNS entries for each instance)
-  - Supports Snapshot / Restore
-  - Supports Admin Scripts
-- Environment Management
-  - Capacity of each server and environment.
+The current draft plans using MariaDB and Elasticsearch instances that are deployed traditionally on each dedicated server.
+This means that a cplace instance has to be bound to a specific Swarm node.
+Also, we do not require a cluster file system.
+
+Stack features:
+
+- Instance Management:
+  - cplace deployments and updates
+  - Snapshot and restore functionality
+  - Admin script execution
+- Cluster capacity management
 
 ### Nomad
 
@@ -77,16 +127,16 @@ TBD
 
 We want to support a user-friendly way to select the intended cplace build:
 
-- An organization has accessible cplace integration repositories, for example, customer specific integration repos.
-- A user is part of an organization and has implicit access to the cplace integration repos.
-- This mapping is contained in Controller domain.
+- An organization has accessible cplace integration repositories, for example, customer-specific integration repositories.
+- A user is part of an organization and has implicit access to the cplace integration repositories.
+- This mapping is contained in the Controller domain.
 - The user can select the desired cplace release from the Controller UI:
   - User selects a cplace repository
   - Controller uses info from Operator API and own definition which cplace release versions are supported (e.g. 22.4, 23.4).
     The Operator needs to distinguish cplace release due to infrastructure differences (e.g. Java, Elasticsearch version).
     The Controller distinguishes cplace release versions due to configuration differences.
   - User selects the desired cplace release version.
-  - Controller populates list of builds
+  - Controller populates the list of builds
 
 The cplace Container is prepared like this (at least on Classic Stack):
 
@@ -104,7 +154,7 @@ The instances are maintained in the following structure:
 >   /instances:
 >     sewe.cf.test.cplace.cloud/config.yaml
 
-TBD We could also have one repo for all environment and would then have the following structure:
+TBD We could also have one repo for all environments and would then have the following structure:
 
 > cplace-cssc-environments (cloned GIT repo):
 >   /environments/test/instances:
@@ -171,7 +221,7 @@ Returns environment information:
   - type: Type of backend stack (Classic, Nomad, Kubernetes...)
   - baseDomain: Base domain of the environment, e.g. `test.cplace.cloud`
   - git:
-    - repo: repository of the environment specific instance configuration
+    - repo: repository of the environment-specific instance configuration
     - branch: GIT branch
 - status:
   - instanceCount
@@ -276,7 +326,7 @@ Restarts the specified instance.
 
 Performs a cplace update of the specified instance.
 The step requires that the new release is specified in the updated instance configuration in GIT.
-If configuration is changed, any change is also automatically applied.
+If the configuration is changed, any change is also automatically applied.
 
 #### Snapshots API
 
@@ -300,7 +350,7 @@ Lists all snapshots of the specified cplace instance.
 Params:
 
 - release: cplace release the snapshot was created with.
-- limit: retrieve only specified number of snapshots (default 10)
+- limit: retrieve only a specified number of snapshots (default 10)
 - offset: 0
 
 > `POST /instances/{instanceId}/snapshots`
@@ -308,7 +358,7 @@ Params:
 Performs a cplace snapshot using Tenant export functionality.
 Such a snapshot may only be restored to the same cplace release version.
 
-This API does not limit number of Snapshots created, but the Controller should.
+This API does not limit the number of Snapshots created, but the Controller should.
 Snapshots will not currently be automatically removed (later they should).
 
 > `GET /instances/{instanceId}/snapshots/{snapshotId}`
@@ -332,7 +382,7 @@ A meta JSON file is stored under `/instances/sewe.cf.test.cplace.cloud/admin-scr
 Script execution will be monitored by the Operator.
 The status of stale running scripts will be updated to "aborted" or "crashed" depending on the Operator's knowledge of the cplace instance.
 
-Admin scripts cannot be cancelled.
+Admin scripts cannot be canceled.
 
 > `GET /instances/{instanceId}/admin-scripts`
 
@@ -347,7 +397,7 @@ The information is retrieved from the meta JSON file.
 
 Params:
 - status: filter by status
-- limit: retrieve only specified number of snapshots (default 10)
+- limit: retrieve only a specified number of snapshots (default 10)
 - offset: 0
 
 > `POST /instances/{instanceId}/admin-scripts`
@@ -366,7 +416,7 @@ Retrieves information for the specified admin script and instance (see above).
 > `GET /dns`
 
 Returns the DNS information of the specified instance domain.
-Should be used by Controller to determine if a user selected instance name is available.
+Should be used by Controller to determine if a user-selected instance name is available.
 
 HTTP 404 when the DNS entry was not found.
 
@@ -374,7 +424,7 @@ HTTP 200 when it exists and returns its information:
 - type: Type of DNS record (e.g. `A`)
 - value: Target IP or name (e.g. `1.2.3.4`)
 
-Creating DNS entries via API is currently not planned and implicitly done by the deployment procedure.
+Creating DNS entries via API is currently not planned and is implicitly done by the deployment procedure.
 
 ## Example Flow
 
@@ -382,16 +432,16 @@ Creating DNS entries via API is currently not planned and implicitly done by the
 
 The cSSC Controller deploys a cplace instance.
 The instance configuration is stored on GIT.
-The operator is informed by a webhook of a GIT change, or checks it at regular intervals.
-The instance belongs to a user/organization, however the Operator component is not aware of users or organizations.
+The operator is informed by a webhook of a GIT change or checks it at regular intervals.
+The instance belongs to a user/organization, however, the Operator component is not aware of users or organizations.
 
 #### User Inputs
 
 There are several supported use cases how a user may deploy a cplace instance to the cSSC.
-The user inputs will be stored by the Controller in GIT along with other instance specific configuration.
+The user inputs will be stored by the Controller in GIT along with other instance-specific configuration.
 
 The Controller component is responsible to validate user inputs before submitting to GIT.
-For example, the Controller would confirm by calling the `GET /dns` API that the user selected instance domain name is available.
+For example, the Controller would confirm by calling the `GET /dns` API that the user-selected instance domain name is available.
 
 Demo case:
 
@@ -434,3 +484,66 @@ Storing them is out of scope of the Operator.
   - The metrics can be consumed by Controller and displayed to the user.
 - Instances are monitored by the Operator.
   When an instance is crashing (depending on the backend stack) the instance will automatically be restarted until the attempts are exceeded.
+
+## Links
+
+- Shared storage: https://linbit.com/blog/create-a-docker-swarm-with-volume-replication-using-linbit-sds/
+
+
+
+
+docker swarm:
+
+swarm in "simple" mode:
+  - no cluster/replicated volumes
+  - no DB cluster (one DB per node)
+  - cplace instances are tied to one node
+  - Advantages: network communication (*.test.cplace.cloud -> hcloud LB -> dedi server)
+operator runs in swarm cluster
+operator connects to swarm endpoint
+to deploy, operator iterates through the nodes, and the first node with enough resources will be used to deploy
+
+cplace Init procedure:
+
+- select available node         -> < 1s
+- create database+db user       -> < 1s
+- create volume for cplace data -> < 1s
+- download software if missing  -> 0 .. 2 min
+- bind mount software           -> < 1s
+- start cplace container        -> ±1 min (basic init...)
+
+
+operator should support fast instance deployments.
+instance actions should run in separate "threads"
+
+
+Worker procedure:
+
+- clone GIT
+- validate GIT structure
+- load git instance config
+- iterate through instances from GIT and perform actions if required:
+  - deploy
+  - delete
+  - config change / update
+- the actions should be async and return fast to the iterating loop
+
+Orphaned instances:
+  - instance running in cluster but has no GIT definition
+  - can happen if the GIT was manually edited.
+    Note: When GIT structure is invalid, this should be prevented and not cause orphaned instances!
+  - GetInstances() can return orphaned instances, filter supports orphaned flag
+    controller can then show / cleanup orphaned instances (e.g. by admins)
+
+Instance Locking:
+  - If a change request is already processed for an instance, the worker loop should skip the instance until the next run.
+    That means instance jobs need to be tracked for completion.
+
+Keeping track of activities:
+  - each Instance object Status indicates whats going on.
+  - e.g. when the instance is being deployed, the status will contain the relevant information, including the phase of deployment
+
+Robustness:
+  - each action should be able to recover, in case it was aborted violently
+  - e.g when the deployment is restarted, the procedure should only run steps if needed and perform the missing steps.
+    basic idempotence.
