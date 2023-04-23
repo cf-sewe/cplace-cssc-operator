@@ -1,6 +1,7 @@
-package environment
+package environment_old
 
 import (
+	"context"
 	"log"
 	"os"
 	"time"
@@ -10,8 +11,8 @@ import (
 
 // Environment is an interface that defines the methods for managing cplace instances in a specific environment type.
 type Environment interface {
-	// GetEnvironmentInfo returns the information about the environment as per configuration.
-	GetEnvironmentInfo() (EnvironmentInfo, error)
+	// GetEnvironmentConfig returns the information about the environment as per configuration.
+	GetEnvironmentConfig() (EnvironmentConfig, error)
 	// GetEnvironmentStatus returns the status of the environment.
 	GetEnvironmentStatus() (EnvironmentStatus, error)
 	// GetEnvironmentMetrics returns the metrics for the environment.
@@ -33,8 +34,8 @@ type Environment interface {
 	DeleteInstance(instance *instance.Instance) error
 }
 
-// EnvironmentInfo represents the information about the environment as per configuration.
-type EnvironmentInfo struct {
+// EnvironmentConfig represents the information about the environment as per configuration.
+type EnvironmentConfig struct {
 	// Type is the type of the environment (e.g. "swarm", "nomad")
 	Type string
 	// Name is the environment specifier, e.g. "test", "stag", "prod"
@@ -75,14 +76,22 @@ type EnvironmentMetrics struct {
 	}
 }
 
-func New() Environment {
+// NewEnvironment creates a new environment instance based on the environment
+// type specified in the environment variable CSSC_OPERATOR_ENVIRONMENT_TYPE.
+func NewEnvironment(ctx context.Context) Environment {
 	var env Environment
-	envType := os.Getenv("CSSC_OPERATOR_ENVIRONMENT_TYPE")
-	switch envType {
+
+	// Populate EnvironmentConfig struct with environment variables
+	es := EnvironmentConfig{
+		Type:   os.Getenv("CSSC_OPERATOR_ENVIRONMENT_TYPE"),
+		Name:   os.Getenv("CSSC_OPERATOR_ENVIRONMENT_NAME"),
+		Domain: os.Getenv("CSSC_OPERATOR_ENVIRONMENT_DOMAIN"),
+	}
+	switch es.Type {
 	case "swarm":
-		env = NewSwarm()
+		env = NewSwarmEnvironment()
 	default:
-		log.Fatalf("Unsupported environment type: %s", envType)
+		log.Fatalf("Unsupported environment type: %s", es.Type)
 	}
 	return env
 }

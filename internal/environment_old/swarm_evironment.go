@@ -1,9 +1,9 @@
-package environment
+package environment_old
 
 import (
 	"log"
 
-	"github.com/cplace/cssc-operator/internal/instance"
+	"github.com/cf-sewe/cplace-cssc-operator/internal/instance"
 	"github.com/docker/docker/client"
 )
 
@@ -14,12 +14,17 @@ type SwarmEnvironment struct {
 }
 
 // NewSwarm creates a new Swarm instance with a Docker client.
-func NewSwarm() *SwarmEnvironment {
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+func NewSwarmEnvironment() *SwarmEnvironment {
+	log.Println("Initializing Swarm environment")
+	client.NewEnvClient()
+	// Initialize a new Docker client with the environment variables
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Fatalf("Failed to create Docker client: %v", err)
+		log.Fatalf("Failed to create Swarm client: %v", err)
 	}
-	return &SwarmEnvironment{client: cli}
+	return &SwarmEnvironment{
+		client: cli,
+	}
 }
 
 // ApplyInstance applies the given instance configuration to the swarm cluster.

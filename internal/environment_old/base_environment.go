@@ -1,4 +1,4 @@
-package environment
+package environment_old
 
 import (
 	"github.com/cf-sewe/cplace-cssc-operator/internal/instance"
@@ -10,6 +10,10 @@ import (
 // BaseEnvironment implements the common methods for all environments.
 type BaseEnvironment struct {
 	// some fields
+}
+
+func (e *BaseEnvironment) GetEnvironmentConfig() (EnvironmentConfig, error) {
+
 }
 
 // GetInstances returns a list of all instances in the environment.

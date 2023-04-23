@@ -34,8 +34,7 @@ One environment contains cplace instances, that are managed by the operator.
 The cplace instances are defined in a GIT repository, with one YAML file per instance.
 
 When the Operator starts, it will initialize the connection to the environment using the connection data specified in the env configuration.
-It also starts a background worker that checks the GIT repository for instance definitions (including their configuration)
-and applies them to the environment regularly.
+It also starts a background worker that checks the GIT repository for instance definitions (including their configuration) and applies them to the environment regularly.
 
 Then it initializes the gin framework HTTP routes for environment and instance management.
 Example actions that may be triggered via API:
