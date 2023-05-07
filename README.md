@@ -6,9 +6,11 @@
     - [Data Persistency](#data-persistency)
     - [Dependencies](#dependencies)
   - [Stacks](#stacks)
-    - [Classic](#classic)
-    - [Nomad](#nomad)
-    - [Kubernetes](#kubernetes)
+    - [Docker Swarm](#docker-swarm)
+      - [Implementation Information](#implementation-information)
+      - [cplace Container Preparation](#cplace-container-preparation)
+      - [Storage Layout](#storage-layout)
+      - [Instance Quota](#instance-quota)
   - [cplace Release Management](#cplace-release-management)
   - [Instance Configuration](#instance-configuration)
   - [APIs](#apis)
@@ -27,13 +29,13 @@
 
 This service is called Operator and is responsible for managing cplace instance deployments for a specific environment via GIT and a RESTful API.
 One instance of the operator is responsible for one environment.
-There are several environment types (stacks): Docker Swarm, Nomad, and Kubernetes.
+Docker Swarm is used as the backing cplace container orchestration system.
 
 The operator configuration is loaded from the OS environment variables or a `.env` file.
 One environment contains cplace instances, that are managed by the operator.
 The cplace instances are defined in a GIT repository, with one YAML file per instance.
 
-When the Operator starts, it will initialize the connection to the environment using the connection data specified in the env configuration.
+When the Operator starts, it initializes the connection to the environment using the connection data specified in the env configuration.
 It also starts a background worker that checks the GIT repository for instance definitions (including their configuration) and applies them to the environment regularly.
 
 Then it initializes the gin framework HTTP routes for environment and instance management.
@@ -75,13 +77,18 @@ The Operator does not have a database in the traditional sense, but it stores ce
    Software releases are downloaded in the deployment phase of a cplace instance.
    To allow efficient deployments, the releases are stored at a central location and hard-linked to the containers that require that build.
 
-cplace instance configuration is provided by GIT and instance status is determined on-the-fly from the running system.
+cplace instance *configuration* is provided by GIT and instance status is determined on-the-fly from the running system.
+
+Scanning the directories & files is inefficient, especially for real-time operations.
+For example finding instances that are owned by a specific user requires scanning all instance directories.
+Therefore, we use a cache for the instance information.
+The cache is updated with instance operations or regularly in the background.
 
 ### Dependencies
 
 We use the following dependencies:
 
-- [gin-gonic/gin](https://github.com/gin-gonic/gin): Web framework
+- [go-chi/chi](https://github.com/go-chi/chi): Minimalistic web framework
 - [go-git/go-git](https://github.com/go-git/go-git): GIT interface
 
 For classic stack:
@@ -90,21 +97,22 @@ For classic stack:
 
 ## Stacks
 
-### Classic
+### Docker Swarm
 
-This stack relies on Hetzner dedicated machines for running cplace instances cost-efficiently.
-The intended use is for non-commercial instances.
+The Docker Swarm stack relies on Hetzner dedicated machines for running cplace instances cost-efficiently.
+Docker Swarm provides an HTTP API endpoint for managing the service deployments.
+By using the Docker Swarm provided overlay network,
+we can also use a wildcard domain (e.g. *.test.cplace.cloud) and use a Hetzner load-balancer as cluster entry-point.
 
-cplace is running as Docker containers and the data is stored on Docker volumes backed by ZFS.
-The cplace container will be built on-the-fly from the software downloaded from Central.
-
-The classic stack makes use of a simple Docker Swarm cluster.
-This brings the advantage of a single HTTP API endpoint for managing the Docker deployments.
-We can also use a wildcard domain (e.g. *.test.cplace.cloud) and use a Hetzner load-balancer as cluster entry-point.
-
-The current draft plans using MariaDB and Elasticsearch instances that are deployed traditionally on each dedicated server.
+The current implementation is using MariaDB and Elasticsearch instances that are deployed on each dedicated server.
+We do not use ES or DB clusters.
 This means that a cplace instance has to be bound to a specific Swarm node.
-Also, we do not require a cluster file system.
+Therefore, we do not require a cluster file system for cplace or the cplace databases.
+The intended use of this stack is for non-commercial cplace instances running as single nodes.
+
+cplace is running as Docker containers and the data is stored on Docker volumes backed by ZFS with a quota.
+The cplace container is lightweight and does not contain the cplace build.
+The build is downloaded from Central to a shared storage and then hard-linked and mounted to the container.
 
 Stack features:
 
@@ -114,13 +122,64 @@ Stack features:
   - Admin script execution
 - Cluster capacity management
 
-### Nomad
+#### Implementation Information
 
-TBD
+swarm configured in "simple" mode:
+  - no cluster/replicated volumes
+  - no DB cluster (one DB per node)
+  - cplace instances are tied to one node
+  - Advantages: network communication (*.test.cplace.cloud -> hcloud LB -> dedi server)
+operator runs in swarm cluster
+operator connects to swarm endpoint
+to deploy, operator iterates through the nodes, and the first node with enough resources will be used to deploy
 
-### Kubernetes
+cplace Init procedure:
 
-TBD
+- select available node         -> < 1s
+- create database+db user       -> < 1s
+- create volume for cplace data -> < 1s
+- download software if missing  -> < 5min
+- hard-link/bind mount software -> < 1s
+- start cplace container        -> ±1 min (basic init...)
+
+operator should support fast instance deployments.
+deployments can run in parallel.
+instance actions should run in separate "threads"
+
+#### cplace Container Preparation
+
+- For each cplace release, a Dockerfile and configuration template is prepared.
+  This means that we do not need individual container images.
+- When deploying an instance, the required software.zip is downloaded from Central and stored on a shared storage.
+  The software.zip is downloaded to a central location and unzipped.
+- For each instance:
+  - a /data/instances/<instance>/data & /properties folder is created
+  - the correct software is hard-linked to the instance folder
+  - the configuration is created from the template for the specific cplace release
+  - the databases are created
+
+#### Storage Layout
+
+| **Path** | **Size** | **Description** |
+| --- | --- | --- |
+| /boot | 1GB | Boot partition |
+| / | 100GB | Root partition |
+| ceph* | 100GB | ceph storage for cplace instance configuration and releases |
+| rpool | rest | ZFS pool for data |
+
+We need a cluster file system to make cplace instance configuration and releases accessible from each node.
+We want to use a fraction of each node disk and add it to one large pool.
+We can check ceph or Piraeus for this task.
+
+Alternatively we can avoid using a shared storage.
+The instance configs can be stored in Swarm configs.
+The releases can be stored only on each node where its required.
+
+#### Instance Quota
+
+- Each cplace instance has a quota for tenant files and database size.
+- tenant files are located on a ZFS volume (/data/instances/<instance>/data/tenants).
+- database for the instance is located on a ZFS volume (/data/instances/<instance>/db).
 
 ## cplace Release Management
 
@@ -483,37 +542,14 @@ Storing them is out of scope of the Operator.
   - The metrics can be consumed by Controller and displayed to the user.
 - Instances are monitored by the Operator.
   When an instance is crashing (depending on the backend stack) the instance will automatically be restarted until the attempts are exceeded.
+- Private container registry running in Swarm Stack.
+  Images are regularly cleaned from it if too old and unused.
 
 ## Links
 
 - Shared storage: https://linbit.com/blog/create-a-docker-swarm-with-volume-replication-using-linbit-sds/
 
 
-
-
-docker swarm:
-
-swarm in "simple" mode:
-  - no cluster/replicated volumes
-  - no DB cluster (one DB per node)
-  - cplace instances are tied to one node
-  - Advantages: network communication (*.test.cplace.cloud -> hcloud LB -> dedi server)
-operator runs in swarm cluster
-operator connects to swarm endpoint
-to deploy, operator iterates through the nodes, and the first node with enough resources will be used to deploy
-
-cplace Init procedure:
-
-- select available node         -> < 1s
-- create database+db user       -> < 1s
-- create volume for cplace data -> < 1s
-- download software if missing  -> 0 .. 2 min
-- bind mount software           -> < 1s
-- start cplace container        -> ±1 min (basic init...)
-
-
-operator should support fast instance deployments.
-instance actions should run in separate "threads"
 
 
 Worker procedure:
